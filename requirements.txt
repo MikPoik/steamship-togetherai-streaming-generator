@@ -1,0 +1,5 @@
+openai==1.3.4
+tenacity==8.2.2
+steamship==2.17.32
+requests
+sseclient-py
