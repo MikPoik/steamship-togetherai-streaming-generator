@@ -2,7 +2,7 @@ import json
 import logging
 import time
 from typing import Any, Dict, List, Optional, Type
-
+import os
 import tiktoken
 from pydantic import Field
 
@@ -189,7 +189,7 @@ class TogetherAIPlugin(StreamingGenerator):
         )
         options = options or {}
         stopwords = options.get("stop", None)
-        print("stopwords", stopwords)
+        #logging.warning("options: " + str(options))
 
         @retry(
             reraise=True,
@@ -220,18 +220,19 @@ class TogetherAIPlugin(StreamingGenerator):
                         prompt += f'\n<|{msg["role"]}|>\n{msg["content"]}</s>'
                     prompt += "\n<|assistant|>\n"
 
-            elif "nous-hermes-llama" in self.config.model.lower():
+            elif "nous-hermes-llama" in self.config.model.lower(
+            ) or "mythomax" in self.config.model.lower():
                 if len(messages) == 1:
                     prompt = f'{messages[0]["content"]}'
                 elif len(messages) == 2:
-                    prompt = f'### Instruction:\n\n{messages[0]["content"]}\n\n'
+                    prompt = f'### Instruction:\n{messages[0]["content"]}\n'
                     prompt += f'\n### Input:\n{messages[1]["role"]}:\n{messages[1]["content"]}\n'
                     prompt += f'\n### Response:\nassistant:\n'
                     #print(prompt)
                 else:
                     # Check if the first message has a role "system" and handle it
                     if messages and messages[0]['role'] == RoleTag.SYSTEM:
-                        prompt = f'### Instruction:\n\n{messages[0]["content"]}\n\n'
+                        prompt = f'### Instruction:\n{messages[0]["content"]}\n'
                         messages = messages[
                             1:]  # Remove the first message from the list
                     else:
@@ -243,7 +244,7 @@ class TogetherAIPlugin(StreamingGenerator):
                         ) - 1:  # Check if it is the last message
                             prompt += f'\n\n### Input:\n{msg["role"]}:\n{msg["content"]}\n'
                         else:
-                            prompt += f'\n{msg["role"]}:\n{msg["content"]}\n'
+                            prompt += f'\n    {msg["role"]}:\n    {msg["content"]}\n'
                     prompt += "\n### Response:\nassistant:\n"
                     #print(prompt)
 
@@ -258,7 +259,7 @@ class TogetherAIPlugin(StreamingGenerator):
                     for msg in messages:
                         prompt += f'\n<|im_start|>{msg["role"]}\n{msg["content"]}<|im_end|>'
                     prompt += "\n<|im_start|>assistant\n"
-                print(prompt)
+                #print(prompt)
             payload = {
                 "model": self.config.model,
                 "prompt": prompt,
@@ -302,14 +303,23 @@ class TogetherAIPlugin(StreamingGenerator):
                     name=RoleTag(RoleTag.ASSISTANT),
                 )
                 tagged = True
+            if 'choices' in partial_result and partial_result[
+                    'choices'] and 'text' in partial_result['choices'][0]:
+                text_chunk = partial_result['choices'][0]['text']
 
-            if text_chunk := partial_result["choices"][0]["text"]:
-                output_block.append_stream(bytes(text_chunk, encoding="utf-8"))
-                output_texts[0] += text_chunk
+                if stopwords is not None and text_chunk not in stopwords:
+                    if len(text_chunk) > 0:
+                        output_block.append_stream(
+                            bytes(text_chunk, encoding="utf-8"))
+                        output_texts[0] += text_chunk
+                elif stopwords is None:
+                    if len(text_chunk) > 0:
+                        output_block.append_stream(
+                            bytes(text_chunk, encoding="utf-8"))
+                        output_texts[0] += text_chunk
 
         for output_block in output_blocks:
             output_block.finish_stream()
-
         usage_reports = []
 
         return usage_reports
@@ -356,17 +366,18 @@ if __name__ == "__main__":
     with Steamship.temporary_workspace() as client:
         llm = TogetherAIPlugin(client=client,
                                config={
-                                   "api_key": "",
-                                   "model": "teknium/OpenHermes-2-Mistral-7B"
+                                   "api_key": os.getenv("TOGETHER_API_KEY"),
+                                   "model":
+                                   "NousResearch/Nous-Hermes-Llama2-70b"
                                })
         blocks = [
             Block(
-                text="Role-play as funny Scientist",
+                text="Role-play as repeater",
                 tags=[Tag(kind=TagKind.ROLE, name=RoleTag.SYSTEM)],
                 mime_type=MimeTypes.TXT,
             ),
             Block(
-                text="How are you?",
+                text="Repeat after me: What's up?",
                 tags=[Tag(kind=TagKind.ROLE, name=RoleTag.USER)],
                 mime_type=MimeTypes.TXT,
             )
@@ -388,7 +399,7 @@ if __name__ == "__main__":
         response = llm.run(
             PluginRequest(data=RawBlockAndTagPluginInputWithPreallocatedBlocks(
                 blocks=blocks,
-                options={"stop": ["<|im_end|>"]},
+                options={"stop": ['<|im_end|>', '</s>']},
                 output_blocks=output_blocks)))
         print(response)
         result_blocks = [
